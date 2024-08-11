@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# 定义颜色
+aoiBlue='\033[1;36m'
+plain='\033[0m'
+
+check_root(){
+    [[ $EUID -ne 0 ]] && echo -e "${aoiBlue}You must be root to run this script.${plain}" && exit 1
+}
+
+check_virtualization(){
+    if [[ -d "/proc/vz" ]]; then
+        echo -e "${aoiBlue}You cannot run this script on an OpenVZ VPS.${plain}"
+        exit 1
+    fi
+}
+
+# 检查系统是否为Debian
+check_sys(){
+    if [[ -f /etc/debian_version ]]; then
+        if grep -q 'Debian' /etc/os-release; then
+            return 0
+        fi
+    fi
+    echo -e "${aoiBlue}This script is only for Debian systems.${plain}"
+    exit 1
+}
+
+# 获取用户输入的Debian版本
+read -p "Please select [Default 2]:" version
+
+if [ -z "$version" ]; then
+    version=2
+fi
+
+if [ "$version" == "0" ] || [ "$version" == "1" ]; then
+    debian_version="bookworm"
+elif [ "$version" == "2" ]; then
+    debian_version="bullseye"
+elif [ "$version" == "3" ]; then
+    debian_version="buster"
+else 
+    echo -e "${aoiBlue}No correct option entered, ready to exit...${plain}"
+    sleep 1
+    exit
+fi
+
+# 自动启用BBR
+enableBBR="y"
+if [[ "$enableBBR" =~ ^[Yy]$ ]]; then
+    bbr_path="/etc/sysctl.d/99-sysctl.conf"
+    target="in-target"
+    BBR="$target sed -i '\$anet.core.default_qdisc = fq' $bbr_path;$target sed -i '\$anet.ipv4.tcp_congestion_control = bbr' $bbr_path;$target sed -i '\$anet.ipv4.tcp_rmem = 8192 262144 536870912' $bbr_path;$target sed -i '\$anet.ipv4.tcp_wmem = 4096 16384 536870912' $bbr_path;$target sed -i '\$anet.ipv4.tcp_adv_win_scale = -2' $bbr_path;$target sed -i '\$anet.ipv4.tcp_collapse_max_bytes = 6291456' $bbr_path;$target sed -i '\$anet.ipv4.tcp_notsent_lowat = 131072' $bbr_path;$target sed -i '\$anet.ipv4.ip_local_port_range = 1024 65535' $bbr_path;$target sed -i '\$anet.core.rmem_max = 536870912' $bbr_path;$target sed -i '\$anet.core.wmem_max = 536870912' $bbr_path;$target sed -i '\$anet.core.somaxconn = 32768' $bbr_path;$target sed -i '\$anet.core.netdev_max_backlog = 32768' $bbr_path;$target sed -i '\$anet.ipv4.tcp_max_tw_buckets = 65536' $bbr_path;$target sed -i '\$anet.ipv4.tcp_abort_on_overflow = 1' $bbr_path;$target sed -i '\$anet.ipv4.tcp_slow_start_after_idle = 0' $bbr_path;$target sed -i '\$anet.ipv4.tcp_timestamps = 1' $bbr_path;$target sed -i '\$anet.ipv4.tcp_syncookies = 0' $bbr_path;$target sed -i '\$anet.ipv4.tcp_syn_retries = 3' $bbr_path;$target sed -i '\$anet.ipv4.tcp_synack_retries = 3' $bbr_path;$target sed -i '\$anet.ipv4.tcp_max_syn_backlog = 32768' $bbr_path;$target sed -i '\$anet.ipv4.tcp_fin_timeout = 15' $bbr_path;$target sed -i '\$anet.ipv4.tcp_keepalive_intvl = 3' $bbr_path;$target sed -i '\$anet.ipv4.tcp_keepalive_probes = 5' $bbr_path;$target sed -i '\$anet.ipv4.tcp_keepalive_time = 600' $bbr_path;$target sed -i '\$anet.ipv4.tcp_retries1 = 3' $bbr_path;$target sed -i '\$anet.ipv4.tcp_retries2 = 5' $bbr_path;$target sed -i '\$anet.ipv4.tcp_no_metrics_save = 1' $bbr_path;$target sed -i '\$anet.ipv4.ip_forward = 1' $bbr_path;$target sed -i '\$afs.file-max = 104857600' $bbr_path;$target sed -i '\$afs.inotify.max_user_instances = 8192' $bbr_path;$target sed -i '\$afs.nr_open = 1048576' $bbr_path;$target sed -i '\$anet.ipv4.tcp_fastopen=3' $bbr_path;"
+else
+    BBR=""
+fi
+
+# 安装所需的软件包
+apt-get update && apt-get install -y debootstrap gdisk linux-image-amd64 linux-headers-amd64
+
+# 执行Debian系统安装
+debootstrap --arch amd64 --variant=minbase --components=main,contrib,non-free --include=debian-archive-keyring $debian_version /mnt/ http://deb.debian.org/debian/
+
+# 挂载必要的文件系统
+mount --bind /dev /mnt/dev
+mount --bind /proc /mnt/proc
+mount --bind /sys /mnt/sys
+mount --bind /run /mnt/run
+
+# 安装GRUB引导程序
+chroot /mnt grub-install /dev/sda
+chroot /mnt update-grub
+
+# 设置网络配置
+echo "auto eth0" >> /mnt/etc/network/interfaces
+echo "iface eth0 inet dhcp" >> /mnt/etc/network/interfaces
+
+# 设置默认主机名
+echo "debian" > /mnt/etc/hostname
+
+# 创建 fstab 文件
+echo "/dev/sda1 / ext4 defaults 0 1" > /mnt/etc/fstab
+echo "/dev/sda2 none swap sw 0 0" >> /mnt/etc/fstab
+
+# 启用BBR
+chroot /mnt bash -c "$BBR"
+
+# 结束并卸载
+umount /mnt/dev
+umount /mnt/proc
+umount /mnt/sys
+umount /mnt/run
+umount /mnt
+
+echo -e "${aoiBlue}Installation completed.${plain}"

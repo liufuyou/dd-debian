@@ -1,32 +1,27 @@
 #!/bin/bash
 
-# 定义颜色
-aoiBlue='\033[1;36m'
+underLine='\033[4m'
+aoiBlue='\033[36m'
+blue='\033[34m'
+yellow='\033[33m'
+green='\033[32m'
+red='\033[31m'
 plain='\033[0m'
 
-check_root(){
-    [[ $EUID -ne 0 ]] && echo -e "${aoiBlue}You must be root to run this script.${plain}" && exit 1
-}
+clear
+if [ "$EUID" -ne 0 ]; then
+    echo "Error: Please use the root user to execute this script."
+    exit
+fi
 
-check_virtualization(){
-    if [[ -d "/proc/vz" ]]; then
-        echo -e "${aoiBlue}You cannot run this script on an OpenVZ VPS.${plain}"
-        exit 1
-    fi
-}
+echo -en "\n${aoiBlue}Installation dependencies...${plain}\n"
+apt update
+apt install wget net-tools -y
 
-# 检查系统是否为Debian
-check_sys(){
-    if [[ -f /etc/debian_version ]]; then
-        if grep -q 'Debian' /etc/os-release; then
-            return 0
-        fi
-    fi
-    echo -e "${aoiBlue}This script is only for Debian systems.${plain}"
-    exit 1
-}
-
-# 获取用户输入的Debian版本
+echo -en "\n${aoiBlue}Supported Versions:${plain}\n"
+echo "[1] Debian 12 bookworm"
+echo "[2] Debian 11 bullseye"
+echo "[3] Debian 10 buster"
 read -p "Please select [Default 2]:" version
 
 if [ -z "$version" ]; then
@@ -45,8 +40,30 @@ else
     exit
 fi
 
-# 自动启用BBR
+echo -en "\n${aoiBlue}Start installing Debian $debian_version...${plain}\n"
+
+echo -en "\n${aoiBlue}Set hostname:${plain}\n"
+read -p "Please input [Default digital-review]:" HostName
+if [ -z "$HostName" ]; then
+    HostName="digital-review"
+fi
+
+echo -ne "\n${aoiBlue}Set root password${plain}\n"
+read -p "Please input [Enter directly to generate a random password]: " passwd
+if [ -z "$passwd" ]; then
+    PASSWORD_LENGTH=16
+    passwd=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c $PASSWORD_LENGTH)
+    echo -e "Generated password: ${red}$passwd${plain}"
+fi
+
+echo -ne "\n${aoiBlue}Set ssh port${plain}\n"
+read -p "Please input [Default 22]: " sshPORT
+if [ -z "$sshPORT" ]; then
+    sshPORT=22
+fi
+
 enableBBR="y"
+
 if [[ "$enableBBR" =~ ^[Yy]$ ]]; then
     bbr_path="/etc/sysctl.d/99-sysctl.conf"
     target="in-target"
@@ -55,41 +72,4 @@ else
     BBR=""
 fi
 
-# 安装所需的软件包
-apt-get update && apt-get install -y debootstrap gdisk linux-image-amd64 linux-headers-amd64
-
-# 执行Debian系统安装
-debootstrap --arch amd64 --variant=minbase --components=main,contrib,non-free --include=debian-archive-keyring $debian_version /mnt/ http://deb.debian.org/debian/
-
-# 挂载必要的文件系统
-mount --bind /dev /mnt/dev
-mount --bind /proc /mnt/proc
-mount --bind /sys /mnt/sys
-mount --bind /run /mnt/run
-
-# 安装GRUB引导程序
-chroot /mnt grub-install /dev/sda
-chroot /mnt update-grub
-
-# 设置网络配置
-echo "auto eth0" >> /mnt/etc/network/interfaces
-echo "iface eth0 inet dhcp" >> /mnt/etc/network/interfaces
-
-# 设置默认主机名
-echo "debian" > /mnt/etc/hostname
-
-# 创建 fstab 文件
-echo "/dev/sda1 / ext4 defaults 0 1" > /mnt/etc/fstab
-echo "/dev/sda2 none swap sw 0 0" >> /mnt/etc/fstab
-
-# 启用BBR
-chroot /mnt bash -c "$BBR"
-
-# 结束并卸载
-umount /mnt/dev
-umount /mnt/proc
-umount /mnt/sys
-umount /mnt/run
-umount /mnt
-
-echo -e "${aoiBlue}Installation completed.${plain}"
+root_device=$(df /
